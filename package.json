@@ -1,0 +1,29 @@
+{
+  "name": "jsdb",
+  "version": "1.0.0",
+  "description": "A small js database library",
+  "main": "src/DB.js",
+  "scripts": {
+    "dev": "npm-watch",
+    "bundle": "node concat.js",
+    "test": "node ./src/tests/DB.test.js"
+  },
+  "watch": {
+    "bundle": "src/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/michaelprovenzano/jsdb.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/michaelprovenzano/jsdb/issues"
+  },
+  "homepage": "https://github.com/michaelprovenzano/jsdb#readme",
+  "dependencies": {
+    "concat": "^1.0.3",
+    "gulp-concat": "^2.6.1",
+    "npm-watch": "^0.11.0"
+  }
+}
