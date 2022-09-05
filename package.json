@@ -9,7 +9,8 @@
     "test": "node ./src/tests/DB.test.js"
   },
   "watch": {
-    "bundle": "src/*.js"
+    "bundle": "src/*.js",
+    "test": "src/*.js"
   },
   "repository": {
     "type": "git",
