@@ -135,7 +135,6 @@ class Schema {
   }
 
   normalize(record) {
-    // console.log('Normalize raw: ', record);
     // TODO: More robust testing and features for this method
     let keys = Object.keys(this.validation);
     let normalizedRecord = {};
@@ -144,40 +143,46 @@ class Schema {
       if (!record.hasOwnProperty(key)) continue;
 
       let type = this.validation[key][0].fn;
-      normalizedRecord[key] = record[key];
-      // console.log('Normalizing: ' + key, 'Type Recieved: ' + typeof record[key], 'Type Expected: ' + type);
+      value = record[key];
       if (type === 'isInteger') {
-        if (typeof record[key] === 'string') record[key] = parseFloat(record[key]);
-        if (
-          typeof parseInt(record[key]) === 'number' &&
-          Number.isInteger(parseFloat(record[key]))
-        ) {
-          normalizedRecord[key] = parseInt(record[key]);
-        } else if (Number.isNaN(record[key])) {
-          normalizedRecord[key] = null;
-        }
+        value = this.normalizeInteger(record[key]);
       } else if (type === 'isString') {
-        if (typeof record[key] === 'number') normalizedRecord[key] = record[key] + '';
-        if (typeof record[key] === 'undefined') normalizedRecord[key] = '';
+        value = this.normalizeString(record[key]);
       } else if (type === 'boolean') {
-        if (typeof record[key] === 'boolean') continue;
-        if (typeof record[key] === 'string') {
-          if (record[key].toLowerCase() === 'true') {
-            normalizedRecord[key] = true;
-          } else if (record[key].toLowerCase() === 'false') {
-            normalizedRecord[key] = false;
-          } else {
-            record[key] ? (normalizedRecord[key] = true) : (normalizedRecord[key] = false);
-          }
-        }
-      } else {
-        if (record.hasOwnProperty(key)) normalizedRecord[key] = record[key];
+        value = this.normalizeBoolen(record[key]);
       }
+
+      normalizedRecord[key] = value;
     }
 
-    // console.log('After:', normalizedRecord);
-
     return normalizedRecord;
+  }
+
+  normalizeInteger(value) {
+    if (typeof value === 'string') value = parseFloat(value);
+
+    if (typeof parseInt(value) === 'number' && Number.isInteger(parseFloat(value))) {
+      return parseInt(value);
+    } else if (Number.isNaN(value)) {
+      return null;
+    }
+
+    return value;
+  }
+
+  normalizeString(value) {
+    if (typeof value === 'number') return value + '';
+    if (typeof value === 'undefined') return '';
+  }
+
+  normalizeBoolen(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      if (value.toLowerCase() === 'true') return true;
+      if (value.toLowerCase() === 'false') return false;
+
+      return !!value;
+    }
   }
 
   isValid(record) {

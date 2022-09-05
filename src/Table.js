@@ -203,7 +203,7 @@ class Table {
     if (isIndexed) return null;
 
     // Write record
-    record.__id = this.UUID();
+    record.__id = UUID();
     if (!this.indexed.__id) this.indexed.__id = {};
     this.indexed.__id[record.__id] = true;
 
@@ -229,16 +229,6 @@ class Table {
       this.indexed[key][record[key]] = true;
     });
     return false;
-  }
-
-  UUID() {
-    var dt = new Date().getTime();
-    var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      var r = (dt + Math.random() * 16) % 16 | 0;
-      dt = Math.floor(dt / 16);
-      return (c == 'x' ? r : (r & 0x3) | 0x8).toString(16);
-    });
-    return uuid;
   }
 
   dropColumn(name) {
