@@ -4,6 +4,8 @@ class DB {
     this.name = name;
     this.verbose = opts.verbose || false;
 
+    this._tables = {};
+
     this.save = this.save.bind(this);
     this.loadFromLocalStorage = this.loadFromLocalStorage.bind(this);
     this.loadFromFile = this.loadFromFile.bind(this);
@@ -32,21 +34,16 @@ class DB {
 
     let db = JSON.parse(data);
 
-    let keys = Object.keys(db);
-    let tableKeys = [];
+    let tableKeys = Object.keys(this._tables);
     let records = {};
     let recordIds = {};
-
-    // Guard against non-tables
-    keys.forEach(key => {
-      if (typeof db[key] === 'object' && db[key].isTable) tableKeys.push(key);
-    });
 
     // Sort by references
     let sortedKeys = [];
 
     tableKeys.forEach(key => {
-      let refs = this[key].schema.refs;
+      let curTable = this._tables[key];
+      let refs = curTable.schema.refs;
       let tableRefs = Object.values(refs);
       if (tableRefs.length === 0) return sortedKeys.push(key);
 
@@ -66,7 +63,7 @@ class DB {
       records[key] = [...Object.values(db[key].table)];
 
       // Cache references
-      let refs = this[key].schema.refs;
+      let refs = curTable.schema.refs;
 
       // Replace foreign Ids
       records[key].forEach(record => {
@@ -79,7 +76,6 @@ class DB {
           let refField = refs[recordKey].field;
 
           if (!recordIds[refTable][refField]) return;
-          // console.log(`Replacing key: ${recordKey} | ${record[recordKey]} > ${recordIds[refTable][refField][record[recordKey]]}`);
 
           record[recordKey] = recordIds[refTable][refField][record[recordKey]];
         });
@@ -87,15 +83,15 @@ class DB {
       });
 
       // Delete current records
-      this[key].delete();
-      this[key].indexed = {};
+      curTable.delete();
+      curTable.indexed = {};
 
       // Cache old record ids
       let oldRecordIds = [];
       records[key].forEach(r => oldRecordIds.push(r.__id));
 
       // Add saved records
-      let newRecords = this[key].insert(records[key]);
+      let newRecords = curTable.insert(records[key]);
 
       // Cache new record ids
       let newRecordIds = [];
@@ -133,14 +129,19 @@ class DB {
   }
 
   createTable(name, schema) {
-    this[name] = new Table(schema);
-    this[name].db = this;
-    this[name].name = name;
-    this[name].schema.table = this[name];
+    let newTable = new Table(schema);
+
+    newTable.db = this;
+    newTable.name = name;
+    newTable.schema.table = newTable;
+
+    this._tables[name] = newTable;
+    this[name] = new Query(newTable);
   }
 
   dropTable(name) {
     delete this[name];
+    delete this._tables[name];
   }
 
   migration(tableName, fn) {
@@ -161,16 +162,6 @@ class DB {
     let tableSchema = fn(schema);
     this.createTable(tableName, tableSchema);
     return this;
-  }
-
-  getTableNames() {
-    let names = [];
-    let keys = Object.keys(this);
-    for (let key of keys) {
-      if (typeof this[key] !== 'object') continue;
-      if (this[key].isTable) names.push(key);
-    }
-    return names;
   }
 
   error(msg) {

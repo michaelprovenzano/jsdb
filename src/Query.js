@@ -4,40 +4,58 @@ class Query {
     this.query = {};
   }
 
-  select(fields) {
+  select() {
+    let fields = [];
+    if (arguments) fields = [...arguments];
+
     this.query.select = fields;
+    return this;
   }
 
   where(options) {
     this.query.where = options;
+    return this;
   }
 
   insert(records) {
+    if (!records) records = [];
     this.query.newRecords = records;
+    return this;
   }
 
   delete() {
     this.query.delete = true;
+    return this;
   }
 
   update(newValuesObject) {
     this.query.updatedRecord = newValuesObject;
+    return this;
   }
 
   go() {
-    let records = this.table.records;
+    let records = Object.values(this.table._records);
+    let query = this.query;
 
-    if (this.query.where) records = filterRecords();
-    if (this.query.newRecords) return this.table.insert(this.query.newRecords);
-    if (this.query.updatedRecord) return this.table.update(records, this.query.updatedRecord);
-    if (this.query.delete) return this.table.delete(records);
+    // Handle filtering
+    if (query.where) records = this.filterRecords(records);
+    if (query.select) records = this.filterFields(records);
 
+    // Reset query object before returning
     this.query = {};
+
+    // Manipulate the records and return values
+    if (query.newRecords) return this.table.insert(query.newRecords);
+    if (query.updatedRecord) return this.table.update(records, query.updatedRecord); //TODO: modify the table object to modify the records passed in
+    if (query.delete) return this.table.delete(records);
+
+    return records;
   }
 
-  filterRecords() {
-    let queryKeys = Object.keys(this.query.where);
-    return this.table.records.filter(record => {
+  filterRecords(records) {
+    let query = this.query.where;
+    let queryKeys = Object.keys(query);
+    return records.filter(record => {
       let isMatch = true;
       if (query)
         queryKeys.forEach(key => {
@@ -66,6 +84,19 @@ class Query {
         });
 
       return isMatch;
+    });
+  }
+
+  filterFields(records) {
+    if (this.query.select.length === 0) return records;
+
+    return records.map(record => {
+      let newRecord = {};
+      for (let field of this.query.select) {
+        newRecord[field] = record[field];
+      }
+
+      return newRecord;
     });
   }
 }

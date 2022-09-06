@@ -1,8 +1,120 @@
-class Schema {
+function UUID() {
+  var dt = new Date().getTime();
+  var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    var r = (dt + Math.random() * 16) % 16 | 0;
+    dt = Math.floor(dt / 16);
+    return (c == 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+  return uuid;
+}
+
+class Query {
   constructor(table) {
+    this.table = table;
+    this.query = {};
+  }
+
+  select() {
+    let fields = [];
+    if (arguments) fields = [...arguments];
+
+    this.query.select = fields;
+    return this;
+  }
+
+  where(options) {
+    this.query.where = options;
+    return this;
+  }
+
+  insert(records) {
+    if (!records) records = [];
+    this.query.newRecords = records;
+    return this;
+  }
+
+  delete() {
+    this.query.delete = true;
+    return this;
+  }
+
+  update(newValuesObject) {
+    this.query.updatedRecord = newValuesObject;
+    return this;
+  }
+
+  go() {
+    let records = Object.values(this.table._records);
+    let query = this.query;
+
+    // Handle filtering
+    if (query.where) records = this.filterRecords(records);
+    if (query.select) records = this.filterFields(records);
+
+    // Reset query object before returning
+    this.query = {};
+
+    // Manipulate the records and return values
+    if (query.newRecords) return this.table.insert(query.newRecords);
+    if (query.updatedRecord) return this.table.update(records, query.updatedRecord); //TODO: modify the table object to modify the records passed in
+    if (query.delete) return this.table.delete(records);
+
+    return records;
+  }
+
+  filterRecords(records) {
+    let query = this.query.where;
+    let queryKeys = Object.keys(query);
+    return records.filter(record => {
+      let isMatch = true;
+      if (query)
+        queryKeys.forEach(key => {
+          // Handle basic get
+          if (typeof query[key] !== 'object') {
+            if (query[key] !== record[key]) isMatch = false;
+
+            // Handle NOT, LESS THAN, GREATER THAN
+          } else if (Object.is(query[key], null)) {
+            if (Object.is(record[key], null)) isMatch = false;
+          } else if (Object.is(query[key], undefined)) {
+            if (Object.is(record[key], undefined)) isMatch = false;
+          } else {
+            if (query[key].hasOwnProperty('not')) {
+              if (query[key].not === record[key]) isMatch = false;
+            } else if (query[key].hasOwnProperty('lt')) {
+              if (query[key].lt < record[key]) isMatch = false;
+            } else if (query[key].hasOwnProperty('lte')) {
+              if (query[key].lte <= record[key]) isMatch = false;
+            } else if (query[key].hasOwnProperty('gt')) {
+              if (query[key].gt > record[key]) isMatch = false;
+            } else if (query[key].hasOwnProperty('gte')) {
+              if (query[key].gte >= record[key]) isMatch = false;
+            }
+          }
+        });
+
+      return isMatch;
+    });
+  }
+
+  filterFields(records) {
+    if (this.query.select.length === 0) return records;
+
+    return records.map(record => {
+      let newRecord = {};
+      for (let field of this.query.select) {
+        newRecord[field] = record[field];
+      }
+
+      return newRecord;
+    });
+  }
+}
+
+class Schema {
+  constructor() {
     this.validation = {};
     this.props = [];
-    this.table = table;
     this.uniqueKeys = {};
     this.refs = {};
     this.defaults = {};
@@ -53,6 +165,64 @@ class Schema {
     return typeof value === 'boolean';
   }
 
+  uuid(value) {
+    this.props.push(value);
+    this.addValidation(value, 'isUUID');
+    if (!this._uuids) this._uuids = {};
+    this._uuids[value] = true;
+    return this;
+  }
+
+  isUUID() {
+    return true;
+  }
+
+  handleUUID(record) {
+    let keys = Object.keys(record);
+
+    keys.forEach(key => {
+      if (!this._uuids) return;
+      if (!this._uuids[key]) return;
+      record[key] = UUID();
+    });
+
+    return record;
+  }
+
+  increment(value) {
+    this.props.push(value);
+    this.addValidation(value, 'isIncrement');
+    if (!this._increments) this._increments = {};
+    this._increments[value] = 0;
+    return this;
+  }
+
+  isIncrement() {
+    return true;
+  }
+
+  handleIncrements(record) {
+    let incrementsTable = this._increments;
+    if (!incrementsTable) return record;
+
+    let keys = Object.keys(incrementsTable);
+    keys.forEach(key => {
+      incrementsTable[key]++;
+
+      let currentIncrement = incrementsTable[key];
+
+      record[key] = currentIncrement;
+    });
+
+    return record;
+  }
+
+  primary() {
+    this.addValidation(this.currentValue(), 'isPrimary');
+    this.unique();
+    return this;
+  }
+
   notNullable() {
     this.addValidation(this.currentValue(), 'isNotNull');
     return this;
@@ -76,9 +246,8 @@ class Schema {
     if (!currentReference) return true;
 
     let table = this.table;
-
-    if (currentReference.table) table = this.table.db[currentReference.table];
-    let hasRef = table.indexed[currentReference.field];
+    if (currentReference.table) table = this.table.db._tables[currentReference.table];
+    let hasRef = table._indexed[currentReference.field];
     if (!hasRef) {
       this.table.db.error('Referenced fields must be UNIQUE');
       return false;
@@ -95,15 +264,16 @@ class Schema {
   }
 
   unique() {
+    if (this.uniqueKeys[this.currentValue()]) return this; // prevent duplicate isUnique validation calls for primary keys
     this.uniqueKeys[this.currentValue()] = true;
     this.addValidation(this.currentValue(), 'isUnique');
     return this;
   }
 
   isUnique(value, key) {
-    if (this.table.indexed[key] === undefined) return true;
+    if (this.table._indexed[key] === undefined) return true;
 
-    return !this.table.indexed[key].hasOwnProperty(value);
+    return !this.table._indexed[key].hasOwnProperty(value);
   }
 
   currentValue() {
@@ -134,7 +304,7 @@ class Schema {
     return newRecord;
   }
 
-  normalize(record) {
+  normalize(record, isNewRecord) {
     // TODO: More robust testing and features for this method
     let keys = Object.keys(this.validation);
     let normalizedRecord = {};
@@ -143,13 +313,18 @@ class Schema {
       if (!record.hasOwnProperty(key)) continue;
 
       let type = this.validation[key][0].fn;
-      value = record[key];
+      let value = record[key];
       if (type === 'isInteger') {
-        value = this.normalizeInteger(record[key]);
+        value = this.normalizeInteger(value);
       } else if (type === 'isString') {
-        value = this.normalizeString(record[key]);
+        value = this.normalizeString(value);
       } else if (type === 'boolean') {
-        value = this.normalizeBoolen(record[key]);
+        value = this.normalizeBoolen(value);
+      } else if (type === 'isUUID' && isNewRecord) {
+        value = UUID();
+      } else if (type === 'isIncrement' && isNewRecord) {
+        value = this._increments[key];
+        this._increments[key] += 1;
       }
 
       normalizedRecord[key] = value;
@@ -173,6 +348,8 @@ class Schema {
   normalizeString(value) {
     if (typeof value === 'number') return value + '';
     if (typeof value === 'undefined') return '';
+
+    return value;
   }
 
   normalizeBoolen(value) {
@@ -213,27 +390,19 @@ class Schema {
   }
 
   removeId(record) {
-    let newRecord = {};
-
-    let keys = Object.keys(record);
-    keys.forEach(key => {
-      if (key !== 'id') newRecord[key] = record[key];
-    });
-
-    return newRecord;
+    if (record.__id) delete record.__id;
+    return record;
   }
 }
 
 class Table {
   constructor(schema) {
-    this.table = {};
+    this._records = {};
     this.schema = schema;
     this.isTable = true;
-    this.indexed = {};
+    this._indexed = {};
 
     this.insert = this.insert.bind(this);
-    this.where = this.where.bind(this);
-    this.select = this.select.bind(this);
     this.update = this.update.bind(this);
     this.delete = this.delete.bind(this);
   }
@@ -262,94 +431,7 @@ class Table {
     return returnedRecords;
   }
 
-  where(query) {
-    let where = record => {
-      if (!query) query = {};
-      let queryKeys = Object.keys(query);
-      let isMatch = true;
-
-      if (query)
-        queryKeys.forEach(key => {
-          // Handle basic get
-          if (typeof query[key] !== 'object') {
-            if (query[key] !== record[key]) isMatch = false;
-
-            // Handle NOT, LESS THAN, GREATER THAN
-          } else if (Object.is(query[key], null)) {
-            if (Object.is(record[key], null)) isMatch = false;
-          } else if (Object.is(query[key], undefined)) {
-            if (Object.is(record[key], undefined)) isMatch = false;
-          } else {
-            if (query[key].hasOwnProperty('not')) {
-              if (query[key].not === record[key]) isMatch = false;
-            } else if (query[key].hasOwnProperty('lt')) {
-              if (query[key].lt < record[key]) isMatch = false;
-            } else if (query[key].hasOwnProperty('lte')) {
-              if (query[key].lte <= record[key]) isMatch = false;
-            } else if (query[key].hasOwnProperty('gt')) {
-              if (query[key].gt > record[key]) isMatch = false;
-            } else if (query[key].hasOwnProperty('gte')) {
-              if (query[key].gte >= record[key]) isMatch = false;
-            }
-          }
-        });
-
-      return isMatch;
-    };
-
-    return {
-      select: (...props) => {
-        if (arguments.length > 0) return this.select(where, ...props);
-        return this.select(where);
-      },
-      update: newRecord => {
-        if (arguments.length > 0) return this.update(where, newRecord);
-        return this.update(where);
-      },
-      delete: () => this.delete(where),
-    };
-  }
-
-  select() {
-    let table = Object.values(this.table);
-    if (arguments.length > 0) {
-      let args = {};
-      [...arguments].forEach(arg => {
-        if (typeof arg === 'string') args[arg] = true;
-      });
-
-      if (typeof arguments[0] === 'function') {
-        table = table.filter(arguments[0]);
-      }
-
-      if (Object.keys(args).length === 0) return table;
-
-      let newTable = [];
-      for (let i = 0; i < table.length; i++) {
-        let record = table[i];
-        let newRecord = { ...record };
-        let keys = Object.keys(record);
-        keys.forEach(key => {
-          if (!args[key]) delete newRecord[key];
-        });
-        newTable.push(newRecord);
-      }
-
-      table = newTable;
-    }
-    return table;
-  }
-
-  update() {
-    if (arguments.length === 0) return;
-
-    let query = () => true;
-    let newRecord = arguments[0];
-    if (arguments.length > 1) {
-      query = arguments[0];
-      newRecord = arguments[1];
-    }
-
+  update(records, newRecord) {
     // Run onSave
     if (this.schema.onSave) newRecord = this.schema.onSave(newRecord);
 
@@ -359,46 +441,34 @@ class Table {
     if (!isValid) return;
 
     let uniqueKeys = Object.keys(this.schema.uniqueKeys);
-    let table = Object.values(this.table);
-    let records = []; // For returning the new records
+    let returnedRecords = []; // For returning the new records
 
-    for (let i = table.length - 1; i >= 0; i--) {
-      let thisRecord = table[i];
-      if (query(thisRecord)) {
-        let keys = Object.keys(newRecord);
-        keys.forEach(key => {
-          if (key === 'id') return; // Temp fix until ids are added as primary keys
+    records.forEach(record => {
+      let keys = Object.keys(newRecord);
+      keys.forEach(key => {
+        if (key === '__id') return;
 
-          // Update indexed keys
-          if (uniqueKeys.includes(key)) {
-            delete this.indexed[key][thisRecord[key]];
-            this.indexed[key][newRecord[key]] = true;
-          }
-          this.table[thisRecord.__id][key] = newRecord[key];
-        });
-        this.table[thisRecord.__id].updated_at = new Date();
-        records.push(this.table[thisRecord.__id]);
-      }
-    }
+        // Update indexed keys
+        if (uniqueKeys.includes(key)) {
+          delete this._indexed[key][record[key]];
+          this._indexed[key][newRecord[key]] = true;
+        }
+        this._records[record.__id][key] = newRecord[key];
+      });
 
-    return records;
+      this._records[record.__id].updated_at = new Date();
+      returnedRecords.push(this._records[record.__id]);
+    });
+
+    return returnedRecords;
   }
 
-  delete() {
-    let query = () => true;
-    if (arguments.length > 0) query = arguments[0];
+  delete(records) {
+    if (!records) return null;
 
-    let table = Object.values(this.table);
-    for (let i = table.length - 1; i > -1; i--) {
-      let thisRecord = table[i];
-      let keys = Object.keys(thisRecord);
-      if (query(thisRecord)) {
-        keys.forEach(key => {
-          if (this.indexed[key]) delete this.indexed[key][thisRecord[key]]; // Remove indexed keys on delete
-        });
-        delete this.table[thisRecord.__id];
-      }
-    }
+    records.forEach(record => {
+      delete this._records[record.__id];
+    });
 
     return null;
   }
@@ -407,13 +477,13 @@ class Table {
     let { schema, table } = this;
 
     // Prevent adding and id to new records (for database migrations)
-    if (record.hasOwnProperty('id')) record = this.schema.removeId(record);
+    if (record.hasOwnProperty('__id')) record = this.schema.removeId(record);
 
     // Run onSave
     if (schema.onSave) record = schema.onSave(record);
 
     // Normalize and Validate
-    record = schema.normalize(record);
+    record = schema.normalize(record, true);
     let isValid = schema.isValid(record);
     if (!isValid)
       return this.db.error(
@@ -428,14 +498,17 @@ class Table {
     let isIndexed = this.indexRecord(record);
     if (isIndexed) return null;
 
+    record = schema.handleIncrements(record);
+    record = schema.handleUUID(record);
+
     // Write record
-    record.__id = this.UUID();
-    if (!this.indexed.__id) this.indexed.__id = {};
-    this.indexed.__id[record.__id] = true;
+    record.__id = UUID();
+    if (!this._indexed.__id) this._indexed.__id = {};
+    this._indexed.__id[record.__id] = true;
 
     record.created_at = new Date();
     record.updated_at = new Date();
-    table[record.__id] = record;
+    this._records[record.__id] = record;
 
     return record;
   }
@@ -445,26 +518,16 @@ class Table {
     Object.keys(record).forEach(key => {
       if (key === 'id') return; // Temp fix until ids are able to be added as primary keys
       if (!schema.uniqueKeys[key]) return;
-      if (this.indexed[key] === undefined) this.indexed[key] = {};
+      if (this._indexed[key] === undefined) this._indexed[key] = {};
 
-      if (this.indexed[key].hasOwnProperty(record[key]) && key !== '__id') {
+      if (this._indexed[key].hasOwnProperty(record[key]) && key !== '__id') {
         this.db.error(`Duplicate value for UNIQUE KEY [${key}]`);
         return true;
       }
 
-      this.indexed[key][record[key]] = true;
+      this._indexed[key][record[key]] = true;
     });
     return false;
-  }
-
-  UUID() {
-    var dt = new Date().getTime();
-    var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      var r = (dt + Math.random() * 16) % 16 | 0;
-      dt = Math.floor(dt / 16);
-      return (c == 'x' ? r : (r & 0x3) | 0x8).toString(16);
-    });
-    return uuid;
   }
 
   dropColumn(name) {
@@ -477,6 +540,8 @@ class DB {
     if (!opts) opts = {};
     this.name = name;
     this.verbose = opts.verbose || false;
+
+    this._tables = {};
 
     this.save = this.save.bind(this);
     this.loadFromLocalStorage = this.loadFromLocalStorage.bind(this);
@@ -506,21 +571,16 @@ class DB {
 
     let db = JSON.parse(data);
 
-    let keys = Object.keys(db);
-    let tableKeys = [];
+    let tableKeys = Object.keys(this._tables);
     let records = {};
     let recordIds = {};
-
-    // Guard against non-tables
-    keys.forEach(key => {
-      if (typeof db[key] === 'object' && db[key].isTable) tableKeys.push(key);
-    });
 
     // Sort by references
     let sortedKeys = [];
 
     tableKeys.forEach(key => {
-      let refs = this[key].schema.refs;
+      let curTable = this._tables[key];
+      let refs = curTable.schema.refs;
       let tableRefs = Object.values(refs);
       if (tableRefs.length === 0) return sortedKeys.push(key);
 
@@ -540,7 +600,7 @@ class DB {
       records[key] = [...Object.values(db[key].table)];
 
       // Cache references
-      let refs = this[key].schema.refs;
+      let refs = curTable.schema.refs;
 
       // Replace foreign Ids
       records[key].forEach(record => {
@@ -553,7 +613,6 @@ class DB {
           let refField = refs[recordKey].field;
 
           if (!recordIds[refTable][refField]) return;
-          // console.log(`Replacing key: ${recordKey} | ${record[recordKey]} > ${recordIds[refTable][refField][record[recordKey]]}`);
 
           record[recordKey] = recordIds[refTable][refField][record[recordKey]];
         });
@@ -561,15 +620,15 @@ class DB {
       });
 
       // Delete current records
-      this[key].delete();
-      this[key].indexed = {};
+      curTable.delete();
+      curTable.indexed = {};
 
       // Cache old record ids
       let oldRecordIds = [];
       records[key].forEach(r => oldRecordIds.push(r.__id));
 
       // Add saved records
-      let newRecords = this[key].insert(records[key]);
+      let newRecords = curTable.insert(records[key]);
 
       // Cache new record ids
       let newRecordIds = [];
@@ -607,14 +666,19 @@ class DB {
   }
 
   createTable(name, schema) {
-    this[name] = new Table(schema);
-    this[name].db = this;
-    this[name].name = name;
-    this[name].schema.table = this[name];
+    let newTable = new Table(schema);
+
+    newTable.db = this;
+    newTable.name = name;
+    newTable.schema.table = newTable;
+
+    this._tables[name] = newTable;
+    this[name] = new Query(newTable);
   }
 
   dropTable(name) {
     delete this[name];
+    delete this._tables[name];
   }
 
   migration(tableName, fn) {
@@ -635,16 +699,6 @@ class DB {
     let tableSchema = fn(schema);
     this.createTable(tableName, tableSchema);
     return this;
-  }
-
-  getTableNames() {
-    let names = [];
-    let keys = Object.keys(this);
-    for (let key of keys) {
-      if (typeof this[key] !== 'object') continue;
-      if (this[key].isTable) names.push(key);
-    }
-    return names;
   }
 
   error(msg) {

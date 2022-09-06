@@ -1,8 +1,7 @@
 class Schema {
-  constructor(table) {
+  constructor() {
     this.validation = {};
     this.props = [];
-    this.table = table;
     this.uniqueKeys = {};
     this.refs = {};
     this.defaults = {};
@@ -53,6 +52,64 @@ class Schema {
     return typeof value === 'boolean';
   }
 
+  uuid(value) {
+    this.props.push(value);
+    this.addValidation(value, 'isUUID');
+    if (!this._uuids) this._uuids = {};
+    this._uuids[value] = true;
+    return this;
+  }
+
+  isUUID() {
+    return true;
+  }
+
+  handleUUID(record) {
+    let keys = Object.keys(record);
+
+    keys.forEach(key => {
+      if (!this._uuids) return;
+      if (!this._uuids[key]) return;
+      record[key] = UUID();
+    });
+
+    return record;
+  }
+
+  increment(value) {
+    this.props.push(value);
+    this.addValidation(value, 'isIncrement');
+    if (!this._increments) this._increments = {};
+    this._increments[value] = 0;
+    return this;
+  }
+
+  isIncrement() {
+    return true;
+  }
+
+  handleIncrements(record) {
+    let incrementsTable = this._increments;
+    if (!incrementsTable) return record;
+
+    let keys = Object.keys(incrementsTable);
+    keys.forEach(key => {
+      incrementsTable[key]++;
+
+      let currentIncrement = incrementsTable[key];
+
+      record[key] = currentIncrement;
+    });
+
+    return record;
+  }
+
+  primary() {
+    this.addValidation(this.currentValue(), 'isPrimary');
+    this.unique();
+    return this;
+  }
+
   notNullable() {
     this.addValidation(this.currentValue(), 'isNotNull');
     return this;
@@ -76,9 +133,8 @@ class Schema {
     if (!currentReference) return true;
 
     let table = this.table;
-
-    if (currentReference.table) table = this.table.db[currentReference.table];
-    let hasRef = table.indexed[currentReference.field];
+    if (currentReference.table) table = this.table.db._tables[currentReference.table];
+    let hasRef = table._indexed[currentReference.field];
     if (!hasRef) {
       this.table.db.error('Referenced fields must be UNIQUE');
       return false;
@@ -95,15 +151,16 @@ class Schema {
   }
 
   unique() {
+    if (this.uniqueKeys[this.currentValue()]) return this; // prevent duplicate isUnique validation calls for primary keys
     this.uniqueKeys[this.currentValue()] = true;
     this.addValidation(this.currentValue(), 'isUnique');
     return this;
   }
 
   isUnique(value, key) {
-    if (this.table.indexed[key] === undefined) return true;
+    if (this.table._indexed[key] === undefined) return true;
 
-    return !this.table.indexed[key].hasOwnProperty(value);
+    return !this.table._indexed[key].hasOwnProperty(value);
   }
 
   currentValue() {
@@ -134,7 +191,7 @@ class Schema {
     return newRecord;
   }
 
-  normalize(record) {
+  normalize(record, isNewRecord) {
     // TODO: More robust testing and features for this method
     let keys = Object.keys(this.validation);
     let normalizedRecord = {};
@@ -143,13 +200,18 @@ class Schema {
       if (!record.hasOwnProperty(key)) continue;
 
       let type = this.validation[key][0].fn;
-      value = record[key];
+      let value = record[key];
       if (type === 'isInteger') {
-        value = this.normalizeInteger(record[key]);
+        value = this.normalizeInteger(value);
       } else if (type === 'isString') {
-        value = this.normalizeString(record[key]);
+        value = this.normalizeString(value);
       } else if (type === 'boolean') {
-        value = this.normalizeBoolen(record[key]);
+        value = this.normalizeBoolen(value);
+      } else if (type === 'isUUID' && isNewRecord) {
+        value = UUID();
+      } else if (type === 'isIncrement' && isNewRecord) {
+        value = this._increments[key];
+        this._increments[key] += 1;
       }
 
       normalizedRecord[key] = value;
@@ -173,6 +235,8 @@ class Schema {
   normalizeString(value) {
     if (typeof value === 'number') return value + '';
     if (typeof value === 'undefined') return '';
+
+    return value;
   }
 
   normalizeBoolen(value) {
@@ -213,13 +277,7 @@ class Schema {
   }
 
   removeId(record) {
-    let newRecord = {};
-
-    let keys = Object.keys(record);
-    keys.forEach(key => {
-      if (key !== 'id') newRecord[key] = record[key];
-    });
-
-    return newRecord;
+    if (record.__id) delete record.__id;
+    return record;
   }
 }

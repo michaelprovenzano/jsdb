@@ -10,7 +10,7 @@
   },
   "watch": {
     "bundle": "src/*.js",
-    "test": "src/*.js"
+    "test": "src/**/*.js"
   },
   "repository": {
     "type": "git",
