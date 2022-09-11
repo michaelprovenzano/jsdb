@@ -1,5 +1,6 @@
 const DB = require('../../dist/bundle');
-const WaffleTests = require('./test-init');
+const WaffleTests = require('./WaffleTests');
+const migration = require('./Migration');
 const wt = new WaffleTests({ environment: 'NODE' });
 
 /*
@@ -7,96 +8,8 @@ const wt = new WaffleTests({ environment: 'NODE' });
 DATABASE
 ====================================
 */
-let db = new DB('brick-order-app', { verbose: false })
-
-  /*
-====================================
-User
-====================================
-*/
-
-  .migration('users', table => {
-    table.string('name').notNullable();
-    table.integer('age');
-    table.boolean('isOnMailingList').notNullable().default(true);
-    table.string('gender').default('male');
-    table.string('email').notNullable().unique();
-
-    return table;
-  })
-
-  /*
-====================================
-User
-====================================
-*/
-
-  .migration('login', table => {
-    table.string('email').notNullable().unique().references('email').fromTable('users');
-    table.string('password').notNullable();
-
-    return table;
-  })
-
-  /*
-====================================
-Favorite Colors
-====================================
-*/
-
-  .migration('colors', table => {
-    table.string('userId').notNullable().references('__id').fromTable('users');
-    table.integer('color').notNullable();
-
-    return table;
-  })
-
-  /*
-====================================
-Parts
-====================================
-*/
-  .migration('parts', table => {
-    // table.uuid('id').primaryKey();
-    table.string('description');
-    table.integer('designId');
-    table.integer('materialId').unique();
-    table.integer('colorId').notNullable();
-    table.string('type').notNullable().default('OTHER');
-    table.boolean('basicElement').notNullable().default(false);
-
-    return table;
-  })
-
-  /*
-====================================
-TESTING - ONSAVE
-====================================
-*/
-  .migration('onsave', table => {
-    table.string('name');
-
-    table.onSave = record => {
-      record.name = 'OnSave Ran';
-
-      return record;
-    };
-
-    return table;
-  })
-
-  /*
-====================================
-TESTING - INCREMENTS
-====================================
-*/
-  .migration('increments', table => {
-    table.increment('id');
-    table.uuid('uuid');
-    table.string('name');
-
-    return table;
-  });
+let db = new DB('brick-order-app', { verbose: false });
+migration(db);
 
 /*
 ====================================
@@ -125,6 +38,13 @@ wt.test('INSERT | Database inserts successfully', () => {
   wt.expect(newRecord.name).toBe('Tom');
   wt.expect(newRecord.age).toBe(31);
   wt.expect(newRecord.email).toBe('test@email.com');
+});
+
+wt.test('INSERT | Database keeps forced id fields', () => {
+  let newRecords = db.users
+    .insert({ id: 'de702e7d-3489-4097-a153-63d34fd9e52d', name: 'Forced ID' })
+    .go();
+  wt.expect(newRecords[0].id).toBe('de702e7d-3489-4097-a153-63d34fd9e52d');
 });
 
 wt.test('SELECT | Database selects fields successfully', () => {
@@ -183,9 +103,11 @@ wt.test('INTEGER | Database allows strings that parse to numbers', () => {
 
 wt.test('INCREMENTS | Database auto-increments increment field types', () => {
   let record = db.increments.insert({ name: 'Auto Increment' }).go()[0];
+
   wt.expect(record.id).toBe(1);
   record = db.increments.insert({ name: 'Auto Increment' }).go()[0];
   record = db.increments.insert({ name: 'Auto Increment' }).go()[0];
+
   wt.expect(record.id).toBe(3);
 });
 
@@ -227,7 +149,8 @@ wt.test('FOREIGN REFERENCE | Database allows valid foreign references', () => {
 
 wt.test('FOREIGN REFERENCE | Database allows foreign references based on ids', () => {
   let user = db.users.insert({ name: 'Favorite Color User' }).go()[0];
-  let favoriteColor = db.colors.insert({ userId: user.__id, color: 1 }).go()[0];
+  let favoriteColor = db.colors.insert({ userId: user.id, color: 1 }).go()[0];
+
   wt.expect(favoriteColor).not().toBeUndefined();
   wt.expect(favoriteColor.userId).toBe(user.__id);
 });
@@ -284,7 +207,7 @@ wt.test('UPDATED AT | Database correctly modifies initial "updated_at" field', (
   wt.expect(parsedDate).not().toBeUndefined();
 });
 
-wt.test('ID | Database ignores assigned ids', () => {
+wt.test('ID | Database ignores assigned __ids', () => {
   let id = '7c851809-d630-437f-898f-a4f349b53fed';
 
   let returnedValues = db.users.insert({ name: 'Update ID', age: 99, __id: id }).go();
@@ -319,8 +242,22 @@ setTimeout(() => {
   });
 }, 2000);
 
+wt.test('LOAD (NODE) | Database retains references on load', () => {
+  let user = db.users.where({ name: 'Favorite Color User' }).select().go()[0];
+  let stringDB = db.stringify();
+
+  let tableNames = Object.keys(db._tables);
+  tableNames.forEach(name => db.dropTable(name));
+  db.load(stringDB, migration);
+
+  let favoriteColor = db.colors.where({ color: 1 }).select().go()[0];
+  wt.expect(favoriteColor.userId).toBe(user.id);
+});
+
 wt.test('LOAD | Database retains references on load', () => {
-  if (wt.environment === 'NODE') return;
+  if (wt.environment === 'NODE') {
+    return wt.expect(1).toBe(1);
+  }
 
   db.save();
   db.loadFromLocalStorage();
@@ -331,8 +268,7 @@ wt.test('LOAD | Database retains references on load', () => {
 });
 
 wt.test('ONSAVE | Database runs onsave function on insert', () => {
-  if (wt.environment === 'NODE') return;
-
+  // if (wt.environment === 'NODE') return;
   db.onsave.insert({ name: 'Wooooo' }).go();
   let record = db.onsave.select().go()[0];
 
@@ -340,7 +276,7 @@ wt.test('ONSAVE | Database runs onsave function on insert', () => {
 });
 
 wt.test('ONSAVE | Database runs onsave function on update', () => {
-  if (wt.environment === 'NODE') return;
+  // if (wt.environment === 'NODE') return;
 
   db.onsave.update({ name: 'Wooooo' }).go();
   let record = db.onsave.select().go()[0];

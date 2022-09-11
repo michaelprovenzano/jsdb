@@ -29,21 +29,36 @@ class DB {
     };
   }
 
-  load(data) {
+  load(data, migrationFile) {
     console.log(`Loading state for database: "${this.name}"`);
 
+    // Reset the database
+    this.dropAllTables();
+
+    // Run migration file
+    migrationFile(this);
+
+    // Populate database
     let db = JSON.parse(data);
+    let tableKeys = Object.keys(db._tables);
+    tableKeys = this.sortKeysByReferences(tableKeys, db);
 
-    let tableKeys = Object.keys(this._tables);
-    let records = {};
-    let recordIds = {};
-
-    // Sort by references
-    let sortedKeys = [];
-
-    tableKeys.forEach(key => {
+    // Add the records
+    for (let key of tableKeys) {
       let curTable = this._tables[key];
+      let records = Object.values(db._tables[key]._records);
+      curTable.insert(records);
+    }
+
+    return this;
+  }
+
+  sortKeysByReferences(tableKeys, db) {
+    let sortedKeys = [];
+    tableKeys.forEach(key => {
+      let curTable = db._tables[key];
       let refs = curTable.schema.refs;
+      if (!refs) refs = {};
       let tableRefs = Object.values(refs);
       if (tableRefs.length === 0) return sortedKeys.push(key);
 
@@ -57,59 +72,12 @@ class DB {
       safeIndex === -1 ? sortedKeys.push(key) : sortedKeys.splice(safeIndex + 1, 0, key);
     });
 
-    // Reset the database
-    for (let key of sortedKeys) {
-      // Cache records
-      records[key] = [...Object.values(db[key].table)];
+    return sortedKeys;
+  }
 
-      // Cache references
-      let refs = curTable.schema.refs;
-
-      // Replace foreign Ids
-      records[key].forEach(record => {
-        let recordKeys = Object.keys(record);
-        recordKeys.forEach(recordKey => {
-          if (Object.keys(refs).length === 0) return;
-          if (!refs.hasOwnProperty(recordKey) || recordKey === 'id') return;
-
-          let refTable = refs[recordKey].table;
-          let refField = refs[recordKey].field;
-
-          if (!recordIds[refTable][refField]) return;
-
-          record[recordKey] = recordIds[refTable][refField][record[recordKey]];
-        });
-        return record;
-      });
-
-      // Delete current records
-      curTable.delete();
-      curTable.indexed = {};
-
-      // Cache old record ids
-      let oldRecordIds = [];
-      records[key].forEach(r => oldRecordIds.push(r.__id));
-
-      // Add saved records
-      let newRecords = curTable.insert(records[key]);
-
-      // Cache new record ids
-      let newRecordIds = [];
-      newRecords.forEach(r => newRecordIds.push(r.__id));
-
-      // Cache OLD_ID:NEW_ID relationship
-      recordIds[key] = {};
-      records[key].forEach((record, i) => {
-        let recordKeys = Object.keys(record);
-        recordKeys.forEach(recordKey => {
-          if (!refs.hasOwnProperty(recordKey) && recordKey !== 'id') return;
-          if (!recordIds[key][recordKey]) recordIds[key][recordKey] = {};
-          recordIds[key][recordKey][oldRecordIds[i]] = newRecordIds[i];
-        });
-      });
-    }
-
-    return this;
+  dropAllTables() {
+    let tableKeys = Object.keys(this._tables);
+    tableKeys.forEach(key => this.dropTable(key));
   }
 
   loadFromLocalStorage() {
@@ -146,19 +114,6 @@ class DB {
 
   migration(tableName, fn) {
     let schema = new Schema();
-
-    // By default set the id to unique
-    // TODO: Change keys to dynamic and allow primary key assignment
-    schema.uniqueKeys.__id = true;
-    schema.validation.__id = [
-      {
-        fn: 'isUnique',
-      },
-      {
-        fn: 'isNotNull',
-      },
-    ];
-
     let tableSchema = fn(schema);
     this.createTable(tableName, tableSchema);
     return this;

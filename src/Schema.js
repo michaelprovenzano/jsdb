@@ -1,10 +1,13 @@
 class Schema {
-  constructor() {
-    this.validation = {};
-    this.props = [];
-    this.uniqueKeys = {};
-    this.refs = {};
-    this.defaults = {};
+  constructor(opts) {
+    if (!opts) opts = {};
+
+    this.validation = opts.validation || {};
+    this.props = opts.props || [];
+    this.uniqueKeys = opts.uniqueKeys || {};
+    this.refs = opts.refs || {};
+    this.defaults = opts.defaults || {};
+    this._increments = opts._increments || {};
 
     this.string = this.string.bind(this);
     this.isString = this.isString.bind(this);
@@ -66,10 +69,10 @@ class Schema {
 
   handleUUID(record) {
     let keys = Object.keys(record);
-
     keys.forEach(key => {
       if (!this._uuids) return;
       if (!this._uuids[key]) return;
+      if (record[key] !== undefined) return;
       record[key] = UUID();
     });
 
@@ -79,7 +82,6 @@ class Schema {
   increment(value) {
     this.props.push(value);
     this.addValidation(value, 'isIncrement');
-    if (!this._increments) this._increments = {};
     this._increments[value] = 0;
     return this;
   }
@@ -94,6 +96,8 @@ class Schema {
 
     let keys = Object.keys(incrementsTable);
     keys.forEach(key => {
+      if (record[key] !== undefined) return;
+
       incrementsTable[key]++;
 
       let currentIncrement = incrementsTable[key];
@@ -207,9 +211,9 @@ class Schema {
         value = this.normalizeString(value);
       } else if (type === 'boolean') {
         value = this.normalizeBoolen(value);
-      } else if (type === 'isUUID' && isNewRecord) {
+      } else if (type === 'isUUID' && isNewRecord && !record[key]) {
         value = UUID();
-      } else if (type === 'isIncrement' && isNewRecord) {
+      } else if (type === 'isIncrement' && isNewRecord && !record[key]) {
         value = this._increments[key];
         this._increments[key] += 1;
       }

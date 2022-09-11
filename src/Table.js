@@ -96,11 +96,6 @@ class Table {
 
     // Set Defaults
     record = schema.setDefaults(record);
-
-    // Index object if unique
-    let isIndexed = this.indexRecord(record);
-    if (isIndexed) return null;
-
     record = schema.handleIncrements(record);
     record = schema.handleUUID(record);
 
@@ -113,13 +108,16 @@ class Table {
     record.updated_at = new Date();
     this._records[record.__id] = record;
 
+    // Index object if unique
+    let isIndexed = this.indexRecord(record);
+    if (isIndexed) return null;
+
     return record;
   }
 
   indexRecord(record) {
     let { schema } = this;
     Object.keys(record).forEach(key => {
-      if (key === 'id') return; // Temp fix until ids are able to be added as primary keys
       if (!schema.uniqueKeys[key]) return;
       if (this._indexed[key] === undefined) this._indexed[key] = {};
 

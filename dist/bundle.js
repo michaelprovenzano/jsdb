@@ -112,12 +112,15 @@ class Query {
 }
 
 class Schema {
-  constructor() {
-    this.validation = {};
-    this.props = [];
-    this.uniqueKeys = {};
-    this.refs = {};
-    this.defaults = {};
+  constructor(opts) {
+    if (!opts) opts = {};
+
+    this.validation = opts.validation || {};
+    this.props = opts.props || [];
+    this.uniqueKeys = opts.uniqueKeys || {};
+    this.refs = opts.refs || {};
+    this.defaults = opts.defaults || {};
+    this._increments = opts._increments || {};
 
     this.string = this.string.bind(this);
     this.isString = this.isString.bind(this);
@@ -179,10 +182,10 @@ class Schema {
 
   handleUUID(record) {
     let keys = Object.keys(record);
-
     keys.forEach(key => {
       if (!this._uuids) return;
       if (!this._uuids[key]) return;
+      if (record[key] !== undefined) return;
       record[key] = UUID();
     });
 
@@ -192,7 +195,6 @@ class Schema {
   increment(value) {
     this.props.push(value);
     this.addValidation(value, 'isIncrement');
-    if (!this._increments) this._increments = {};
     this._increments[value] = 0;
     return this;
   }
@@ -207,6 +209,8 @@ class Schema {
 
     let keys = Object.keys(incrementsTable);
     keys.forEach(key => {
+      if (record[key] !== undefined) return;
+
       incrementsTable[key]++;
 
       let currentIncrement = incrementsTable[key];
@@ -320,9 +324,9 @@ class Schema {
         value = this.normalizeString(value);
       } else if (type === 'boolean') {
         value = this.normalizeBoolen(value);
-      } else if (type === 'isUUID' && isNewRecord) {
+      } else if (type === 'isUUID' && isNewRecord && !record[key]) {
         value = UUID();
-      } else if (type === 'isIncrement' && isNewRecord) {
+      } else if (type === 'isIncrement' && isNewRecord && !record[key]) {
         value = this._increments[key];
         this._increments[key] += 1;
       }
@@ -493,11 +497,6 @@ class Table {
 
     // Set Defaults
     record = schema.setDefaults(record);
-
-    // Index object if unique
-    let isIndexed = this.indexRecord(record);
-    if (isIndexed) return null;
-
     record = schema.handleIncrements(record);
     record = schema.handleUUID(record);
 
@@ -510,13 +509,16 @@ class Table {
     record.updated_at = new Date();
     this._records[record.__id] = record;
 
+    // Index object if unique
+    let isIndexed = this.indexRecord(record);
+    if (isIndexed) return null;
+
     return record;
   }
 
   indexRecord(record) {
     let { schema } = this;
     Object.keys(record).forEach(key => {
-      if (key === 'id') return; // Temp fix until ids are able to be added as primary keys
       if (!schema.uniqueKeys[key]) return;
       if (this._indexed[key] === undefined) this._indexed[key] = {};
 
@@ -566,21 +568,36 @@ class DB {
     };
   }
 
-  load(data) {
+  load(data, migrationFile) {
     console.log(`Loading state for database: "${this.name}"`);
 
+    // Reset the database
+    this.dropAllTables();
+
+    // Run migration file
+    migrationFile(this);
+
+    // Populate database
     let db = JSON.parse(data);
+    let tableKeys = Object.keys(db._tables);
+    tableKeys = this.sortKeysByReferences(tableKeys, db);
 
-    let tableKeys = Object.keys(this._tables);
-    let records = {};
-    let recordIds = {};
-
-    // Sort by references
-    let sortedKeys = [];
-
-    tableKeys.forEach(key => {
+    // Add the records
+    for (let key of tableKeys) {
       let curTable = this._tables[key];
+      let records = Object.values(db._tables[key]._records);
+      curTable.insert(records);
+    }
+
+    return this;
+  }
+
+  sortKeysByReferences(tableKeys, db) {
+    let sortedKeys = [];
+    tableKeys.forEach(key => {
+      let curTable = db._tables[key];
       let refs = curTable.schema.refs;
+      if (!refs) refs = {};
       let tableRefs = Object.values(refs);
       if (tableRefs.length === 0) return sortedKeys.push(key);
 
@@ -594,59 +611,12 @@ class DB {
       safeIndex === -1 ? sortedKeys.push(key) : sortedKeys.splice(safeIndex + 1, 0, key);
     });
 
-    // Reset the database
-    for (let key of sortedKeys) {
-      // Cache records
-      records[key] = [...Object.values(db[key].table)];
+    return sortedKeys;
+  }
 
-      // Cache references
-      let refs = curTable.schema.refs;
-
-      // Replace foreign Ids
-      records[key].forEach(record => {
-        let recordKeys = Object.keys(record);
-        recordKeys.forEach(recordKey => {
-          if (Object.keys(refs).length === 0) return;
-          if (!refs.hasOwnProperty(recordKey) || recordKey === 'id') return;
-
-          let refTable = refs[recordKey].table;
-          let refField = refs[recordKey].field;
-
-          if (!recordIds[refTable][refField]) return;
-
-          record[recordKey] = recordIds[refTable][refField][record[recordKey]];
-        });
-        return record;
-      });
-
-      // Delete current records
-      curTable.delete();
-      curTable.indexed = {};
-
-      // Cache old record ids
-      let oldRecordIds = [];
-      records[key].forEach(r => oldRecordIds.push(r.__id));
-
-      // Add saved records
-      let newRecords = curTable.insert(records[key]);
-
-      // Cache new record ids
-      let newRecordIds = [];
-      newRecords.forEach(r => newRecordIds.push(r.__id));
-
-      // Cache OLD_ID:NEW_ID relationship
-      recordIds[key] = {};
-      records[key].forEach((record, i) => {
-        let recordKeys = Object.keys(record);
-        recordKeys.forEach(recordKey => {
-          if (!refs.hasOwnProperty(recordKey) && recordKey !== 'id') return;
-          if (!recordIds[key][recordKey]) recordIds[key][recordKey] = {};
-          recordIds[key][recordKey][oldRecordIds[i]] = newRecordIds[i];
-        });
-      });
-    }
-
-    return this;
+  dropAllTables() {
+    let tableKeys = Object.keys(this._tables);
+    tableKeys.forEach(key => this.dropTable(key));
   }
 
   loadFromLocalStorage() {
@@ -683,19 +653,6 @@ class DB {
 
   migration(tableName, fn) {
     let schema = new Schema();
-
-    // By default set the id to unique
-    // TODO: Change keys to dynamic and allow primary key assignment
-    schema.uniqueKeys.__id = true;
-    schema.validation.__id = [
-      {
-        fn: 'isUnique',
-      },
-      {
-        fn: 'isNotNull',
-      },
-    ];
-
     let tableSchema = fn(schema);
     this.createTable(tableName, tableSchema);
     return this;
